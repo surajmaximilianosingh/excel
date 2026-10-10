@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Escáner de códigos de barras</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#ffd60a">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -90,8 +93,9 @@ li.new{border-color:var(--ok)}
 .qty{display:flex; align-items:center; gap:6px}
 .qty button{padding:0; width:34px; min-height:34px; background:var(--bg); color:var(--ink); border:1px solid var(--line)}
 .qty b{min-width:24px; text-align:center; font-variant-numeric:tabular-nums}
-li .extra{grid-column:1 / -1; display:grid; grid-template-columns:1fr 1.6fr; gap:6px}
-li input.name, li input.sku{
+li .extra{grid-column:1 / -1; display:grid; grid-template-columns:1fr 1fr; gap:6px}
+li input.name{grid-column:1 / -1}
+li input.name, li input.sku, li input.price{
   min-width:0; font:inherit; font-size:.95rem; padding:8px 10px; border-radius:8px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); width:100%;
 }
@@ -100,6 +104,20 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
   border:1.5px dashed var(--line); border-radius:10px; padding:22px; text-align:center; color:var(--muted);
 }
 
+.total{margin:0 0 8px; font-weight:700; font-variant-numeric:tabular-nums; font-size:1.1rem}
+#sheetName{grid-column:1 / -1}
+.toggle{display:flex; align-items:center; gap:8px; margin-top:10px; font-size:.95rem}
+.toggle input{width:20px; height:20px; accent-color:var(--ok)}
+.sheet-back{position:fixed; inset:0; z-index:20; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; justify-content:center}
+.sheet-back[hidden]{display:none}
+.sheet{width:100%; max-width:560px; background:var(--surface); color:var(--ink); border-radius:18px 18px 0 0; padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px)); display:flex; flex-direction:column; gap:10px}
+.sheet h2{margin:0; font-size:1.1rem}
+.sheet-code{font-size:1.6rem; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:.04em; overflow-wrap:anywhere}
+.sheet .extra{display:grid; grid-template-columns:1fr 1fr; gap:6px}
+.sheet input{min-width:0; font:inherit; padding:10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink)}
+.stepper{display:flex; align-items:center; justify-content:center; gap:18px}
+.stepper button{width:48px; background:var(--bg); color:var(--ink); border:1px solid var(--line); font-size:1.3rem}
+.stepper b{font-size:1.4rem; min-width:40px; text-align:center; font-variant-numeric:tabular-nums}
 .bar{
   position:fixed; left:0; right:0; bottom:0; z-index:5;
   background:var(--surface); border-top:1px solid var(--line);
@@ -128,6 +146,7 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
   <div class="row-actions">
     <button class="ghost" id="stopBtn" disabled>Detener cámara</button>
   </div>
+  <label class="toggle"><input type="checkbox" id="confirmToggle" checked> Pedir confirmación en cada escaneo</label>
   <p class="msg" id="msg" role="status"></p>
 
   <form class="manual" id="manualForm" onsubmit="return false">
@@ -139,6 +158,7 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
     <h2>Productos escaneados</h2>
     <span id="count">0 códigos</span>
   </div>
+  <div class="total" id="total"></div>
   <ul id="list"></ul>
   <div class="empty" id="empty">Todavía no escaneaste nada.</div>
 </main>
@@ -148,6 +168,28 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
     <button class="danger" id="clearBtn" disabled>Vaciar</button>
     <button class="ghost" id="copyBtn" disabled>Copiar</button>
     <button class="primary" id="exportBtn" disabled>Descargar Excel</button>
+  </div>
+</div>
+
+<div class="sheet-back" id="sheetBack" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h2 id="sheetTitle">¿Agregar este producto?</h2>
+    <div class="sheet-code" id="sheetCode"></div>
+    <p class="msg" id="sheetNote"></p>
+    <div class="extra">
+      <input id="sheetSku" placeholder="SKU (opcional)" autocomplete="off">
+      <input id="sheetPrice" inputmode="decimal" placeholder="Precio" autocomplete="off">
+      <input id="sheetName" placeholder="Nombre del producto (opcional)" autocomplete="off">
+    </div>
+    <div class="stepper">
+      <button type="button" id="sheetMinus" aria-label="Restar uno">−</button>
+      <b id="sheetQty">1</b>
+      <button type="button" id="sheetPlus" aria-label="Sumar uno">+</button>
+    </div>
+    <div class="row-actions">
+      <button class="ghost" type="button" id="sheetNo">Descartar</button>
+      <button class="primary" type="button" id="sheetOk">Confirmar</button>
+    </div>
   </div>
 </div>
 
@@ -180,16 +222,20 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
   }
 
   /* ---------- data ---------- */
-  function addCode(code, fmt){
+  function addCode(code, fmt, o){
+    o = o || {};
     code = String(code || '').trim();
     if (!code) return;
     var found = null;
     for (var i = 0; i < items.length; i++){ if (items[i].code === code){ found = items[i]; break; } }
     if (found){
-      found.qty += 1; found.ts = Date.now();
+      found.qty += (o.qty || 1); found.ts = Date.now();
+      if (o.sku) found.sku = o.sku;
+      if (o.name) found.name = o.name;
+      if (o.price) found.price = o.price;
       items.splice(items.indexOf(found), 1); items.unshift(found);
     } else {
-      items.unshift({ code: code, name: '', qty: 1, fmt: fmt || 'manual', ts: Date.now(), first: Date.now() });
+      items.unshift({ code: code, name: o.name || '', sku: o.sku || '', price: o.price || '', qty: o.qty || 1, fmt: fmt || 'manual', ts: Date.now(), first: Date.now() });
     }
     persist(); render(code);
   }
@@ -215,26 +261,71 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
       var sku = document.createElement('input'); sku.className = 'sku'; sku.value = it.sku || '';
       sku.placeholder = 'SKU (opcional)';
       sku.oninput = function(){ it.sku = sku.value; persist(); };
+      var price = document.createElement('input'); price.className = 'price'; price.value = it.price || '';
+      price.placeholder = 'Precio'; price.inputMode = 'decimal';
+      price.oninput = function(){ it.price = price.value; persist(); renderTotal(); };
       var name = document.createElement('input'); name.className = 'name'; name.value = it.name;
       name.placeholder = 'Nombre del producto (opcional)';
       name.oninput = function(){ it.name = name.value; persist(); };
 
-      var extra = document.createElement('div'); extra.className = 'extra'; extra.appendChild(sku); extra.appendChild(name);
+      var extra = document.createElement('div'); extra.className = 'extra'; extra.appendChild(sku); extra.appendChild(price); extra.appendChild(name);
       li.appendChild(c); li.appendChild(right); li.appendChild(extra);
       ul.appendChild(li);
     });
     var n = items.length, total = items.reduce(function(a, b){ return a + b.qty; }, 0);
     $('count').textContent = n + (n === 1 ? ' código' : ' códigos') + (total !== n ? ' · ' + total + ' unidades' : '');
     $('empty').style.display = n ? 'none' : 'block';
+    renderTotal();
     ['clearBtn','copyBtn','exportBtn'].forEach(function(id){ $(id).disabled = !n; });
+  }
+
+  /* ---------- precios ---------- */
+  function num(v){
+    var n = parseFloat(String(v == null ? '' : v).replace(/\s/g, '').replace(',', '.'));
+    return isFinite(n) ? n : null;
+  }
+  function fmtMoney(n){
+    try{ return n.toLocaleString('es-AR', { style: 'currency', currency: 'ARS' }); }
+    catch(e){ return '$ ' + n.toFixed(2); }
+  }
+  function renderTotal(){
+    var t = 0, any = false;
+    items.forEach(function(it){ var p = num(it.price); if (p != null){ t += p * it.qty; any = true; } });
+    $('total').textContent = any ? 'Total: ' + fmtMoney(t) : '';
+  }
+
+  /* ---------- confirmation ---------- */
+  var pending = null;
+  function findItem(code){
+    for (var i = 0; i < items.length; i++){ if (items[i].code === code) return items[i]; }
+    return null;
+  }
+  function openConfirm(code, fmt){
+    pending = { code: code, fmt: fmt };
+    var ex = findItem(code);
+    $('sheetCode').textContent = code;
+    $('sheetSku').value = ex ? (ex.sku || '') : '';
+    $('sheetName').value = ex ? (ex.name || '') : '';
+    $('sheetPrice').value = ex ? (ex.price || '') : '';
+    $('sheetQty').textContent = '1';
+    $('sheetNote').textContent = ex ? 'Ya está en la lista (' + ex.qty + ' u.). Se va a sumar.' : 'Producto nuevo.';
+    $('sheetBack').hidden = false;
+    $('sheetOk').focus();
+  }
+  function closeConfirm(){
+    if (pending) last = { code: pending.code, t: Date.now() };
+    pending = null;
+    $('sheetBack').hidden = true;
   }
 
   /* ---------- scanning ---------- */
   function onDetect(code, fmt){
+    if (pending) return;
     var now = Date.now();
     if (code === last.code && now - last.t < 2500) { last.t = now; return; }
     last = { code: code, t: now };
-    beep(); addCode(code, fmt);
+    beep();
+    if ($('confirmToggle').checked){ openConfirm(code, fmt); } else { addCode(code, fmt); }
     cam.classList.add('hit'); setTimeout(function(){ cam.classList.remove('hit'); }, 350);
     say('Leído: ' + code);
   }
@@ -317,11 +408,14 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
     return d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
   }
   function tableRows(){
-    var head = ['Código de barras', 'SKU', 'Producto', 'Cantidad', 'Formato', 'Escaneado'];
+    var head = ['Código de barras', 'SKU', 'Producto', 'Cantidad', 'Precio unitario', 'Subtotal', 'Formato', 'Escaneado'];
     var body = items.slice().reverse().map(function(it){
-      return [String(it.code), String(it.sku || ''), it.name || '', it.qty, String(it.fmt || '').replace(/_/g, ' '), stamp(it.first || it.ts)];
+      return [String(it.code), String(it.sku || ''), it.name || '', it.qty, (num(it.price) == null ? '' : num(it.price)), (num(it.price) == null ? '' : num(it.price) * it.qty), String(it.fmt || '').replace(/_/g, ' '), stamp(it.first || it.ts)];
     });
-    return [head].concat(body);
+    var rows = [head].concat(body), tq = 0, tt = 0, any = false;
+    items.forEach(function(it){ tq += it.qty; var p = num(it.price); if (p != null){ tt += p * it.qty; any = true; } });
+    rows.push(['', '', 'Total', tq, '', any ? tt : '', '', '']);
+    return rows;
   }
 
   async function exportXlsx(){
@@ -330,7 +424,7 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
     
     try{
       var ws = XLSX.utils.aoa_to_sheet(tableRows());
-      ws['!cols'] = [{ wch: 18 }, { wch: 16 }, { wch: 32 }, { wch: 10 }, { wch: 12 }, { wch: 18 }];
+      ws['!cols'] = [{ wch: 18 }, { wch: 16 }, { wch: 32 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 18 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Productos');
       var buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
@@ -376,6 +470,19 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
   };
   $('manualInput').addEventListener('keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); $('manualBtn').click(); } });
   $('exportBtn').onclick = exportXlsx;
+  $('sheetMinus').onclick = function(){ var q = parseInt($('sheetQty').textContent, 10) || 1; if (q > 1) $('sheetQty').textContent = q - 1; };
+  $('sheetPlus').onclick = function(){ var q = parseInt($('sheetQty').textContent, 10) || 1; $('sheetQty').textContent = q + 1; };
+  $('sheetOk').onclick = function(){
+    if (!pending) return;
+    var q = parseInt($('sheetQty').textContent, 10) || 1;
+    var code = pending.code;
+    addCode(code, pending.fmt, { qty: q, sku: $('sheetSku').value.trim(), name: $('sheetName').value.trim(), price: $('sheetPrice').value.trim() });
+    closeConfirm(); say('Agregado: ' + code);
+  };
+  $('sheetNo').onclick = function(){ closeConfirm(); say('Descartado.'); };
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && pending) $('sheetNo').click(); });
+  try{ $('confirmToggle').checked = localStorage.getItem('escaner_confirm') !== '0'; }catch(e){}
+  $('confirmToggle').onchange = function(){ try{ localStorage.setItem('escaner_confirm', this.checked ? '1' : '0'); }catch(e){} };
   $('copyBtn').onclick = copyTable;
   $('clearBtn').onclick = function(){
     if (!items.length) return;
@@ -385,6 +492,9 @@ li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0;
 
   render();
 
+  if ('serviceWorker' in navigator && location.protocol === 'https:'){
+    try{ navigator.serviceWorker.register('./sw.js').catch(function(){}); }catch(e){}
+  }
   if (window.claude && claude.use){
     claude.use('downloads').then(function(d){ downloads = d; }).catch(function(){ downloads = null; });
   }
