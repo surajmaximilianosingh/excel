@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Escáner de códigos de barras</title>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#f3f5f8; --surface:#ffffff; --ink:#14213d; --muted:#5b6578; --line:#d9dee7;
+  --tag:#ffd60a; --tag-ink:#14213d; --ok:#17884f; --danger:#c0392b;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1522; --surface:#18233a; --ink:#eef2fa; --muted:#9aa6bd; --line:#2a3752;
+    --tag:#ffd60a; --tag-ink:#14213d; --ok:#3ddc84; --danger:#ff7b6b;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1522; --surface:#18233a; --ink:#eef2fa; --muted:#9aa6bd; --line:#2a3752;
+  --tag:#ffd60a; --tag-ink:#14213d; --ok:#3ddc84; --danger:#ff7b6b;
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:"Trebuchet MS","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  font-size:16px; line-height:1.4;
+  padding-bottom:96px;
+}
+main{max-width:560px; margin:0 auto; padding:16px}
+h1{font-size:1.35rem; margin:4px 0 14px; letter-spacing:-.01em}
+
+.cam{
+  position:relative; background:#000; border-radius:14px; overflow:hidden;
+  aspect-ratio:4/3; width:100%;
+}
+.cam video{width:100%; height:100%; object-fit:cover; display:block}
+.cam .idle{
+  position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:12px; color:#fff; text-align:center; padding:20px;
+}
+.cam .idle p{margin:0; max-width:28ch; color:#d4dbea}
+.frame{
+  position:absolute; left:10%; right:10%; top:28%; bottom:28%;
+  border:3px solid var(--tag); border-radius:10px; pointer-events:none; display:none;
+}
+.cam.on .frame{display:block}
+.cam.on .idle{display:none}
+.cam.hit .frame{border-color:#3ddc84; box-shadow:0 0 0 9999px rgba(61,220,132,.18)}
+
+button{
+  font:inherit; font-weight:700; border:0; border-radius:10px; padding:12px 18px;
+  cursor:pointer; min-height:46px;
+}
+button:focus-visible,input:focus-visible{outline:3px solid var(--tag); outline-offset:2px}
+.primary{background:var(--tag); color:var(--tag-ink)}
+.ghost{background:transparent; color:var(--ink); border:1.5px solid var(--line)}
+.danger{background:transparent; color:var(--danger); border:1.5px solid var(--line)}
+button:disabled{opacity:.45; cursor:default}
+
+.row-actions{display:flex; gap:8px; margin-top:10px}
+.row-actions button{flex:1}
+
+.manual{display:flex; gap:8px; margin-top:12px}
+.manual input{
+  flex:1; min-width:0; font:inherit; padding:11px 12px; border-radius:10px;
+  border:1.5px solid var(--line); background:var(--surface); color:var(--ink);
+}
+.msg{margin:10px 0 0; font-size:.92rem; color:var(--muted); min-height:1.3em}
+.msg.err{color:var(--danger)}
+
+.list-head{
+  display:flex; justify-content:space-between; align-items:baseline; margin:22px 0 8px;
+}
+.list-head h2{font-size:1.05rem; margin:0}
+.list-head span{color:var(--muted); font-size:.92rem}
+
+ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px}
+li{
+  background:var(--surface); border:1px solid var(--line); border-radius:10px;
+  padding:10px 12px; display:grid; grid-template-columns:1fr auto; gap:6px 10px; align-items:center;
+}
+li.new{border-color:var(--ok)}
+.code{font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:.02em; overflow-wrap:anywhere}
+.qty{display:flex; align-items:center; gap:6px}
+.qty button{padding:0; width:34px; min-height:34px; background:var(--bg); color:var(--ink); border:1px solid var(--line)}
+.qty b{min-width:24px; text-align:center; font-variant-numeric:tabular-nums}
+li .extra{grid-column:1 / -1; display:grid; grid-template-columns:1fr 1.6fr; gap:6px}
+li input.name, li input.sku{
+  min-width:0; font:inherit; font-size:.95rem; padding:8px 10px; border-radius:8px;
+  border:1px solid var(--line); background:var(--bg); color:var(--ink); width:100%;
+}
+li .del{grid-column:auto; background:transparent; color:var(--muted); padding:0; width:34px; min-height:34px; font-size:1.1rem}
+.empty{
+  border:1.5px dashed var(--line); border-radius:10px; padding:22px; text-align:center; color:var(--muted);
+}
+
+.bar{
+  position:fixed; left:0; right:0; bottom:0; z-index:5;
+  background:var(--surface); border-top:1px solid var(--line);
+  padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));
+}
+.bar-in{max-width:560px; margin:0 auto; display:flex; gap:8px}
+.bar .primary{flex:1}
+@media (prefers-reduced-motion: no-preference){
+  .cam.hit .frame{transition:border-color .1s}
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>Escáner de códigos de barras</h1>
+
+  <div class="cam" id="cam">
+    <video id="video" playsinline muted></video>
+    <div class="frame"></div>
+    <div class="idle">
+      <p>Apuntá la cámara al código de barras del producto.</p>
+      <button class="primary" id="startBtn">Activar cámara</button>
+    </div>
+  </div>
+
+  <div class="row-actions">
+    <button class="ghost" id="stopBtn" disabled>Detener cámara</button>
+  </div>
+  <p class="msg" id="msg" role="status"></p>
+
+  <form class="manual" id="manualForm" onsubmit="return false">
+    <input id="manualInput" inputmode="numeric" autocomplete="off" placeholder="¿No lee? Escribí el código">
+    <button class="ghost" id="manualBtn" type="button">Agregar</button>
+  </form>
+
+  <div class="list-head">
+    <h2>Productos escaneados</h2>
+    <span id="count">0 códigos</span>
+  </div>
+  <ul id="list"></ul>
+  <div class="empty" id="empty">Todavía no escaneaste nada.</div>
+</main>
+
+<div class="bar">
+  <div class="bar-in">
+    <button class="danger" id="clearBtn" disabled>Vaciar</button>
+    <button class="ghost" id="copyBtn" disabled>Copiar</button>
+    <button class="primary" id="exportBtn" disabled>Descargar Excel</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var KEY = 'escaner_items_v1';
+  var items = [];
+  try { items = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch(e){ items = []; }
+  if (!Array.isArray(items)) items = [];
+
+  var video = $('video'), cam = $('cam'), msg = $('msg');
+  var stream = null, running = false, rafId = 0, detector = null, zx = null;
+  var last = { code: '', t: 0 };
+  var downloads = null;
+
+  function persist(){ try { localStorage.setItem(KEY, JSON.stringify(items)); } catch(e){} }
+  function say(text, isErr){ msg.textContent = text || ''; msg.className = 'msg' + (isErr ? ' err' : ''); }
+
+  /* ---------- feedback ---------- */
+  var actx = null;
+  function beep(){
+    try{
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      var o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'square'; o.frequency.value = 1100; g.gain.value = 0.08;
+      o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + 0.12);
+    }catch(e){}
+    try{ if (navigator.vibrate) navigator.vibrate(60); }catch(e){}
+  }
+
+  /* ---------- data ---------- */
+  function addCode(code, fmt){
+    code = String(code || '').trim();
+    if (!code) return;
+    var found = null;
+    for (var i = 0; i < items.length; i++){ if (items[i].code === code){ found = items[i]; break; } }
+    if (found){
+      found.qty += 1; found.ts = Date.now();
+      items.splice(items.indexOf(found), 1); items.unshift(found);
+    } else {
+      items.unshift({ code: code, name: '', qty: 1, fmt: fmt || 'manual', ts: Date.now(), first: Date.now() });
+    }
+    persist(); render(code);
+  }
+
+  function render(highlight){
+    var ul = $('list'); ul.textContent = '';
+    items.forEach(function(it){
+      var li = document.createElement('li');
+      if (highlight && it.code === highlight) li.className = 'new';
+
+      var c = document.createElement('div'); c.className = 'code'; c.textContent = it.code;
+
+      var right = document.createElement('div'); right.className = 'qty';
+      var minus = document.createElement('button'); minus.type = 'button'; minus.textContent = '−'; minus.setAttribute('aria-label','Restar uno');
+      var q = document.createElement('b'); q.textContent = it.qty;
+      var plus = document.createElement('button'); plus.type = 'button'; plus.textContent = '+'; plus.setAttribute('aria-label','Sumar uno');
+      var del = document.createElement('button'); del.type = 'button'; del.className = 'del'; del.textContent = '✕'; del.setAttribute('aria-label','Quitar ' + it.code);
+      minus.onclick = function(){ if (it.qty > 1){ it.qty--; persist(); render(); } };
+      plus.onclick = function(){ it.qty++; persist(); render(); };
+      del.onclick = function(){ items.splice(items.indexOf(it), 1); persist(); render(); };
+      right.appendChild(minus); right.appendChild(q); right.appendChild(plus); right.appendChild(del);
+
+      var sku = document.createElement('input'); sku.className = 'sku'; sku.value = it.sku || '';
+      sku.placeholder = 'SKU (opcional)';
+      sku.oninput = function(){ it.sku = sku.value; persist(); };
+      var name = document.createElement('input'); name.className = 'name'; name.value = it.name;
+      name.placeholder = 'Nombre del producto (opcional)';
+      name.oninput = function(){ it.name = name.value; persist(); };
+
+      var extra = document.createElement('div'); extra.className = 'extra'; extra.appendChild(sku); extra.appendChild(name);
+      li.appendChild(c); li.appendChild(right); li.appendChild(extra);
+      ul.appendChild(li);
+    });
+    var n = items.length, total = items.reduce(function(a, b){ return a + b.qty; }, 0);
+    $('count').textContent = n + (n === 1 ? ' código' : ' códigos') + (total !== n ? ' · ' + total + ' unidades' : '');
+    $('empty').style.display = n ? 'none' : 'block';
+    ['clearBtn','copyBtn','exportBtn'].forEach(function(id){ $(id).disabled = !n; });
+  }
+
+  /* ---------- scanning ---------- */
+  function onDetect(code, fmt){
+    var now = Date.now();
+    if (code === last.code && now - last.t < 2500) { last.t = now; return; }
+    last = { code: code, t: now };
+    beep(); addCode(code, fmt);
+    cam.classList.add('hit'); setTimeout(function(){ cam.classList.remove('hit'); }, 350);
+    say('Leído: ' + code);
+  }
+
+  function setRunning(on){
+    running = on;
+    cam.classList.toggle('on', on);
+    $('stopBtn').disabled = !on;
+  }
+
+  async function start(){
+    if (running) return;
+    say('Pidiendo acceso a la cámara…');
+    try{
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('nocam');
+      if ('BarcodeDetector' in window){
+        var want = ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code'];
+        var sup = await window.BarcodeDetector.getSupportedFormats();
+        var formats = want.filter(function(f){ return sup.indexOf(f) >= 0; });
+        detector = new window.BarcodeDetector({ formats: formats });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+        video.srcObject = stream; await video.play();
+        setRunning(true); say('Cámara lista. Apuntá al código.');
+        loop();
+      } else if (window.ZXing){
+        var hints = new Map();
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+          ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_A,
+          ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
+          ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.QR_CODE
+        ]);
+        zx = new ZXing.BrowserMultiFormatReader(hints, 300);
+        setRunning(true);
+        await zx.decodeFromConstraints({ video: { facingMode: { ideal: 'environment' } }, audio: false }, video, function(res){
+          if (res) onDetect(res.getText(), String(res.getBarcodeFormat ? res.getBarcodeFormat() : 'código'));
+        });
+        say('Cámara lista. Apuntá al código.');
+      } else {
+        throw new Error('nolib');
+      }
+    }catch(e){
+      stop();
+      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')){
+        say('No hay permiso para usar la cámara. Habilitala en los ajustes del navegador, o escribí el código a mano.', true);
+      } else if (e && e.message === 'nocam'){
+        say('Este navegador no permite usar la cámara acá. Probá abrir el link en Chrome o Safari, o escribí el código a mano.', true);
+      } else {
+        say('No se pudo iniciar la cámara. Escribí el código a mano o abrí el link en otro navegador.', true);
+      }
+    }
+  }
+
+  async function loop(){
+    if (!running || !detector) return;
+    try{
+      if (video.readyState >= 2){
+        var res = await detector.detect(video);
+        if (res && res.length) onDetect(res[0].rawValue, res[0].format);
+      }
+    }catch(e){}
+    rafId = setTimeout(loop, 150);
+  }
+
+  function stop(){
+    clearTimeout(rafId);
+    try{ if (zx) { zx.reset(); zx = null; } }catch(e){}
+    try{ if (stream) stream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+    stream = null; detector = null;
+    try{ video.srcObject = null; }catch(e){}
+    setRunning(false);
+  }
+
+  /* ---------- export ---------- */
+  function stamp(ts){
+    var d = new Date(ts), p = function(n){ return String(n).padStart(2,'0'); };
+    return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function fileDate(){
+    var d = new Date(), p = function(n){ return String(n).padStart(2,'0'); };
+    return d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+  }
+  function tableRows(){
+    var head = ['Código de barras', 'SKU', 'Producto', 'Cantidad', 'Formato', 'Escaneado'];
+    var body = items.slice().reverse().map(function(it){
+      return [String(it.code), String(it.sku || ''), it.name || '', it.qty, String(it.fmt || '').replace(/_/g, ' '), stamp(it.first || it.ts)];
+    });
+    return [head].concat(body);
+  }
+
+  async function exportXlsx(){
+    if (!items.length) return;
+    if (!window.XLSX){ say('No se cargó el generador de Excel. Probá con “Copiar” y pegá en una planilla.', true); return; }
+    
+    try{
+      var ws = XLSX.utils.aoa_to_sheet(tableRows());
+      ws['!cols'] = [{ wch: 18 }, { wch: 16 }, { wch: 32 }, { wch: 10 }, { wch: 12 }, { wch: 18 }];
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Productos');
+      var buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      var fname = 'productos-' + fileDate() + '.xlsx';
+      if (downloads){
+        var r = await downloads.save({ filename: fname, data: buf });
+        say(r && r.status === 'saved' ? 'Excel descargado.' : 'Listo.');
+      } else {
+        var blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a'); a.href = url; a.download = fname;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+        say('Excel descargado.');
+      }
+    }catch(e){
+      if (e && e.code === 'declined') say('Descarga cancelada.');
+      else say('No se pudo descargar el archivo. Probá con “Copiar”.', true);
+    }
+  }
+
+  async function copyTable(){
+    var tsv = tableRows().map(function(r){ return r.join('\t'); }).join('\n');
+    try{
+      await navigator.clipboard.writeText(tsv);
+      say('Copiado. Pegalo en una celda de Excel o Google Sheets.');
+    }catch(e){
+      var ta = document.createElement('textarea'); ta.value = tsv; document.body.appendChild(ta);
+      ta.select(); var ok = false;
+      try{ ok = document.execCommand('copy'); }catch(_){}
+      document.body.removeChild(ta);
+      say(ok ? 'Copiado. Pegalo en una celda de Excel o Google Sheets.' : 'No se pudo copiar.', !ok);
+    }
+  }
+
+  /* ---------- wiring ---------- */
+  $('startBtn').onclick = start;
+  $('stopBtn').onclick = function(){ stop(); say('Cámara detenida.'); };
+  $('manualBtn').onclick = function(){
+    var v = $('manualInput').value.trim();
+    if (!v) return;
+    addCode(v, 'manual'); $('manualInput').value = ''; say('Agregado: ' + v);
+  };
+  $('manualInput').addEventListener('keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); $('manualBtn').click(); } });
+  $('exportBtn').onclick = exportXlsx;
+  $('copyBtn').onclick = copyTable;
+  $('clearBtn').onclick = function(){
+    if (!items.length) return;
+    if (confirm('¿Vaciar toda la lista?')){ items = []; persist(); render(); say('Lista vaciada.'); }
+  };
+  document.addEventListener('visibilitychange', function(){ if (document.hidden && running){ stop(); } });
+
+  render();
+
+  if (window.claude && claude.use){
+    claude.use('downloads').then(function(d){ downloads = d; }).catch(function(){ downloads = null; });
+  }
+})();
+</script>
+</body>
+</html>
